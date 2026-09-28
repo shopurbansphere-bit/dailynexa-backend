@@ -164,14 +164,22 @@ const todayKeyLimiter = rateLimit({
 router.get('/today-key', todayKeyLimiter, async (req, res) => {
   try {
     const today = getKolkataDate();
-    const keyDoc = await Key.findOne({ date: today, status: 'active' });
+    let keyDoc = await Key.findOne({ date: today, status: 'active' });
 
+    // Auto-create today's key if missing
     if (!keyDoc) {
-      return res.json({
-        success: false,
-        error: 'NO_KEY',
-        message: 'No active key for today yet.'
+      const { generateDailyKey } = require('../utils/keygen');
+      const { getExpiresAt } = require('../utils/time');
+      const newKey = generateDailyKey();
+      keyDoc = await Key.create({
+        key: newKey,
+        date: today,
+        expiresAt: getExpiresAt(today),
+        status: 'active',
+        maxDevices: 1,
+        usedDevices: []
       });
+      console.log('Auto-generated daily key for', today, ':', newKey);
     }
 
     res.json({
