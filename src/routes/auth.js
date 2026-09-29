@@ -62,7 +62,9 @@ router.post('/verify-key', verifyLimiter, async (req, res) => {
       return res.status(401).json({ success: false, error });
     }
 
-    // Device binding check
+    // ==========================================
+    // STRICT 1-KEY = 1-DEVICE BINDING CHECK
+    // ==========================================
     if (keyDoc.usedDevices.length >= keyDoc.maxDevices) {
       if (!keyDoc.usedDevices.includes(installationId)) {
         await AdminLog.create({
@@ -70,7 +72,11 @@ router.post('/verify-key', verifyLimiter, async (req, res) => {
           ip,
           details: { key: cleanKey, error: 'DEVICE_LIMIT', installationId }
         });
-        return res.status(403).json({ success: false, error: 'DEVICE_LIMIT' });
+        return res.status(403).json({ 
+          success: false, 
+          error: 'DEVICE_LIMIT',
+          message: 'This key has already been claimed by another device.' 
+        });
       }
     } else {
       // Register this device if new
@@ -79,6 +85,7 @@ router.post('/verify-key', verifyLimiter, async (req, res) => {
         await keyDoc.save();
       }
     }
+    // ==========================================
 
     // Create session
     const sessionToken = generateSessionToken();
@@ -164,24 +171,25 @@ const todayKeyLimiter = rateLimit({
 router.get('/today-key', todayKeyLimiter, async (req, res) => {
   try {
     const today = getKolkataDate();
-    let keyDoc = await Key.findOne({ date: today, status: 'active' });
+    const { getExpiresAt } = require('../utils/time');
+    const expiresAt = getExpiresAt(today);
 
-    // Auto-create today's key if missing
-    if (!keyDoc) {
-      const { generateDailyKey } = require('../utils/keygen');
-      const { getExpiresAt } = require('../utils/time');
-      const newKey = generateDailyKey();
-      keyDoc = await Key.create({
-        key: newKey,
-        date: today,
-        expiresAt: getExpiresAt(today),
-        status: 'active',
-        maxDevices: 1,
-        usedDevices: []
-      });
-      console.log('Auto-generated daily key for', today, ':', newKey);
-    }
+    // 1. Generate a random unique key (e.g., DNX-A1B2-C3D4)
+    const randomPart1 = Math.random().toString(36).substring(2, 6).toUpperCase();
+    const randomPart2 = Math.random().toString(36).substring(2, 6).toUpperCase();
+    const newKey = `DNX-${randomPart1}-${randomPart2}`;
 
+    // 2. Save this brand new key to MongoDB and strictly lock it to 1 device
+    const keyDoc = await Key.create({
+      key: newKey,
+      date: today,
+      expiresAt: expiresAt,
+      status: 'active',
+      maxDevices: 1, 
+      usedDevices: []
+    });
+
+    // 3. Send this unique key to the user's browser
     res.json({
       success: true,
       key: keyDoc.key,
